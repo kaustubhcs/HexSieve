@@ -8,7 +8,7 @@
 #include <cuda_runtime.h>           // cudaFreeHost()
 #include "CUDASieve/cudasieve.hpp"  // CudaSieve::getHostPrimes()
 
-//#define billions 1000
+#define billion 1000000000
 
 unsigned char color_name [] = {'b', 'p', 'r', 'y', 'g', 'c'};
 //                            { 0 ,  1 ,  2 ,  3 ,  4 ,  5 }
@@ -29,29 +29,102 @@ int shift(int prev, int curr) {
   }
 }
 
+// Input: START START_COLOR END
+// Example: 0 4 100000000000
+// Output: END_COLOR
+
+/*
+        1 B     = red
+       10 B     = yellow
+      100 B     = purple
+    1 000 B     = green
+    2 000 B     = purple
+    3 000 B     = cyan
+   10 000 B     = yellow
+  100 000 B     = blue
+1 000 000 B     = yellow
+*/
+
 int main(int argc, char **argv) {
 
-    // run code with argument = number of billions to calculate to
-    int billions = atoi(argv[1]);
+    if (argc != 4){
+        printf ("ERROR: Incorrect number of arguments!\nExiting...\n");
+        return -1;
+    }
+    
+    char *tmp;
+    
+    unsigned long int startpoint = strtoul(argv[1], &tmp, 10);
+    unsigned char start_color = atoi(argv[2]);
+    unsigned long int endpoint = strtoul(argv[3], &tmp, 10);
+    
+    if (endpoint <= startpoint){
+        printf ("ERROR: Endpoint can't be after startpoint!\nExiting...\n");
+        return -1;
+    }
+    
+    if (endpoint <= 128){
+        //printf ("ERROR: FIXME: CudaSieve can't receive number smaller than 128, we need to hard-code it.\n");
+        unsigned char color = start_color;
+        for(uint64_t i = startpoint; i < endpoint; i++) {
+            int flag = 0;
+            for(int j = 2; j <= i/2; ++j) {
+                // condition for non prime number
+                if(i%j==0) {
+                    flag = 1;
+                    break;
+                }
+            }
 
-    int* colors = new int [billions];
+            if (flag == 0) {
+                uint64_t currentModulo = i%6;
+                if (i > 4){
+                    // TODO Simplify this
+                    if(currentModulo == 1) {
+                        if(color % 2 == 0) {
+                            color = (color + 5) % 6;
+                        } else {
+                            color = (color + 1) % 6;
+                        }
+                    } else { // current modulo is equal to 5
+                        if(color % 2 == 0) {
+                            color = (color + 1) % 6;
+                        }
+                        else {
+                            color = (color + 5) % 6;
+                        }
+                    }
+                }
+            }
+        }
+        printf("%d\n", color);
+        return 0;
+    }
+    
+    unsigned int sizeInBillions = ceil((double)(endpoint-startpoint)/billion); 
+    
+    unsigned char* colors = new unsigned char [sizeInBillions+1]; // To include the startpoint color
 
-    double start, elapsed_time;
+    // Setting starting color
+    colors[0] = start_color;
+    
+    
+    // Setting up parallelism
+    omp_set_num_threads(20);
 
-    omp_set_num_threads(16);
-
-    start = CLOCK();
     #pragma omp parallel for
-    for (uint64_t j = 0; j < billions; j++){
-        if (j == 0) printf ("Number of threads: %d\n", omp_get_num_threads());
-
-        uint64_t bottom = j*pow(10,9);
-        uint64_t top    = bottom + pow(10,9);
+    for (unsigned long int j = 0; j < sizeInBillions; j++){
+        
+        unsigned long int bottom = startpoint+j*pow(10,9);
+        unsigned long int top    = bottom + pow(10,9);
+        
+        if (top > endpoint) top = endpoint;
+        
         size_t   len;
 
         uint64_t * primes = CudaSieve::getHostPrimes(bottom, top, len);
 
-        int color = 0;
+        unsigned char color = 0;
         for(uint64_t i = 0; i < len; i++){
           uint64_t currentModulo = primes[i]%6;
           if (primes[i] > 4){
@@ -74,37 +147,22 @@ int main(int argc, char **argv) {
             }
           }
         }
-        colors[j] = color;
+        colors[j+1] = color;
 
         // must be freed with this call b/c page-locked memory is used.
         cudaFreeHost(primes);
     }
+    
+    // Reset device
+    cudaDeviceReset();
 
-    elapsed_time = CLOCK() - start;
-    printf ("Execution time to calculate %d billions: %f ms\n", billions, elapsed_time);
-    printf("%d Billion: %d\n", 1, colors[0]);
-    for(uint64_t i = 1; i < billions; i++) {
-        colors[i] = shift(colors[i-1], colors[i]);
-        printf("%" PRIu64 " Billion: %d\n", i+1, colors[i]);
+    for(uint64_t i = 0; i < sizeInBillions; i++) {
+        colors[i+1] = shift(colors[i], colors[i+1]);
     }
+
+    printf("%d\n", colors[sizeInBillions]);
+    //printf("%c\n", color_name[colors[sizeInBillions]]);
 
     delete colors;
     return 0;
 }
-
-/*
-# mapping numbers to spin color
-spin = {  (1,  1) : "blue",
-          (2, -1) : "blue",
-          (2,  1) : "purple",
-          (3, -1) : "purple",
-          (3,  1) : "red",
-          (4, -1) : "red",
-          (4,  1) : "yellow",
-          (5, -1) : "yellow",
-          (5,  1) : "green",
-          (0, -1) : "green",
-          (0,  1) : "cyan",
-          (1, -1) : "cyan"
-        }
-*/
